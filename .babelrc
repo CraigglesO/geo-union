@@ -1,0 +1,15 @@
+{
+  "compact": false,
+  "minified": false,
+  "sourceMap": true,
+  "comments": false,
+  "presets": [
+    ["@babel/preset-env", { "targets": { "node": "current" } }],
+    "@babel/preset-flow"
+  ],
+  "plugins": [
+    "@babel/plugin-transform-async-to-generator",
+    "@babel/plugin-proposal-class-properties",
+    "@babel/plugin-syntax-flow"
+  ]
+}
