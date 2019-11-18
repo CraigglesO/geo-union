@@ -131,7 +131,8 @@ export function getLinesOutsidePoly (lineString: LineString, poly: LineString, k
 
   p1 = lineString[0]
   // First step: figure out if the first point is INSIDE or OUTSIDE the poly, this is our starting point
-  let inside = pointInPolygon(p1, poly, true)
+  let inside = pointInPolygon(p1, poly) || (pointInPolygon(p1, poly, true) && pointInPolygon(lineString[1], poly, true))
+  console.log('inside', inside)
   if (inside) overlap = true
   else line.push(p1)
   // run through each lineString edge and compare with all poly edges. If intersection found, build lines accordingly
@@ -146,9 +147,9 @@ export function getLinesOutsidePoly (lineString: LineString, poly: LineString, k
       p3 = poly[j]
       p4 = poly[j + 1]
       // check for intersection, otherwise
-      const [type, intersection] = intersects(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], p4[0], p4[1])
+      const [type, intersection, secondIntersection] = intersects(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], p4[0], p4[1])
       if (type) {
-        console.log('intersection', type, inside, intersection)
+        console.log('intersection', type, inside, intersection, secondIntersection)
         if (type === 1) {
           // we hit a perfect overlap, its like an inside = true
           if (line.length > 1) lines.push(line)
@@ -165,19 +166,53 @@ export function getLinesOutsidePoly (lineString: LineString, poly: LineString, k
           line = [p2]
           // drop
         } else if (type === 3) {
-          if (!inside) {
-            if (keepOverlap) line.push(p2)
-            else line.push(intersection)
-            if (line.length > 1) lines.push(line)
-            line = []
+          if (secondIntersection) {
+            // first check if they flow together or against one another
+            const flow = getFlow(p1, p2, p3, p4)
+            if (flow) { // flow with eachother
+              if (keepOverlap) {
+                line.push(p2)
+              } else {
+                line.push(intersection)
+                lines.push(line)
+                line = [secondIntersection, p2]
+              }
+            } else { // against one another
+              line.push(secondIntersection)
+              lines.push(line)
+              line = [intersection, p2]
+            }
           } else {
-            if (keepOverlap) line.push(p1, p2)
-            else line.push(intersection, p2)
+            if (!inside) {
+              if (keepOverlap) line.push(p2)
+              else line.push(intersection)
+              if (line.length > 1) lines.push(line)
+              line = []
+            } else {
+              if (keepOverlap) line.push(p1, p2)
+              else line.push(intersection, p2)
+            }
           }
           inside = pointInPolygon(p2, poly, true)
+          if (inside && !pointInPolygon(lineString[i + 2], poly, true)) {
+            inside = false
+            line.push(p2)
+          }
         } else if (type === 4) {
-          if (keepOverlap) line.push(p1, p2)
+          if (secondIntersection) {
+            // first check if they flow together or against one another
+            const flow = getFlow(p1, p2, p3, p4)
+            if (flow) {
+              if (keepOverlap) line.push(p2)
+            }
+          } else {
+            if (keepOverlap) line.push(p1, p2)
+          }
           inside = pointInPolygon(p2, poly, true)
+          if (inside && !pointInPolygon(lineString[i + 2], poly, true)) {
+            inside = false
+            line.push(p2)
+          }
         } else if (type === 5) {
           // check if the end point is inside
           const nextInside = pointInPolygon(p2, poly, true)
@@ -218,7 +253,9 @@ export function getLinesOutsidePoly (lineString: LineString, poly: LineString, k
         break
       }
     }
-    if (!intersectionFound && !inside) line.push(p2)
+    if (!intersectionFound && !inside) {
+      if (!inside) line.push(p2)
+    }
     if (!intersectionFound && inside && line.length) {
       if (line.length > 1) lines.push(line)
       line = []
@@ -227,6 +264,15 @@ export function getLinesOutsidePoly (lineString: LineString, poly: LineString, k
   if (line.length > 1) lines.push(line)
 
   return [lines, overlap]
+}
+
+function getFlow (p1: Point, p2: Point, p3: Point, p4: Point): boolean {
+  const xDir1 = p2[0] - p1[0] >= 0
+  const yDir1 = p2[1] - p1[1] >= 0
+  const xDir2 = p4[0] - p3[0] >= 0
+  const yDir2 = p4[1] - p3[1] >= 0
+  if (xDir1 === xDir2 && yDir1 === yDir2) return true
+  return false
 }
 
 function getAllIntersections (p1: number, p2: number, poly: LineString, j: number) {
@@ -277,7 +323,7 @@ export function pointInPolygon (point: Point, poly: LineString, boundary?: boole
       else return false
     }
 
-    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside
+    if (((yi >= y) !== (yj >= y)) && (x <= (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside
   }
 
   return inside
@@ -324,11 +370,22 @@ export function intersects (x1: number, y1: number, x2: number, y2: number, x3: 
     // third case is partial overlap of each edge ([[0, 0], [2, 2]] && [[1, 1], [3, 3]])
     // or one is inside the other flush with edge ([[0, 0], [2, 2]] && [[1, 1], [2, 2]])
     // or one is inside the other ([[0, 0], [2, 2]] && [[0.5, 0.5], [1.5, 1.5]])
-    else if (isPointOnLineSegment(x1, y1, x2, y2, x3, y3)) return [3, [x3, y3]]
-    else if (isPointOnLineSegment(x1, y1, x2, y2, x4, y4)) return [3, [x4, y4]]
-    else if (isPointOnLineSegment(x3, y3, x4, y4, x1, y1)) return [4, [x1, y1]]
-    else if (isPointOnLineSegment(x3, y3, x4, y4, x2, y2)) return [4, [x2, y2]]
-    else return [0, null] // no intersection found
+    else if (isPointOnLineSegment(x1, y1, x2, y2, x3, y3)) {
+      if (isPointOnLineSegment(x1, y1, x2, y2, x4, y4)) return [3, [x3, y3], [x4, y4]]
+      else if ((x1 === x4 && y1 === y4) || (x2 === x4 && y2 === y4)) return [3, [x3, y3], [x4, y4]]
+      return [3, [x3, y3]]
+    } else if (isPointOnLineSegment(x1, y1, x2, y2, x4, y4)) {
+      if ((x1 === x3 && y1 === y3) || (x2 === x3 && y2 === y3)) return [3, [x4, y4], [x3, y3]]
+      return [3, [x4, y4]]
+    } else if (isPointOnLineSegment(x3, y3, x4, y4, x1, y1)) {
+      if (isPointOnLineSegment(x3, y3, x4, y4, x2, y2)) return [4, [x1, y1], [x2, y2]]
+      else if ((x3 === x2 && y3 === y2) || (x4 === x2 && y4 === y2)) return [4, [x1, y1], [x2, y2]]
+      return [4, [x1, y1]]
+    } else if (isPointOnLineSegment(x3, y3, x4, y4, x2, y2)) {
+      if ((x3 === x1 && y3 === y1) || (x4 === x1 && y4 === y1)) return [4, [x2, y2], [x1, y1]]
+      return [4, [x2, y2]]
+    }
+    return [0, null] // no intersection found
   }
   let lambda = ((y4 - y3) * (x4 - x1) + (x3 - x4) * (y4 - y1)) / det
   let gamma = ((y1 - y2) * (x4 - x1) + (x2 - x1) * (y4 - y1)) / det
@@ -351,6 +408,8 @@ export function isPointOnLineSegment (x1: number, y1: number, x2: number, y2: nu
   if (cross !== 0) return false
   if (Math.abs(dxl) >= Math.abs(dyl)) return dxl > 0 ? x1 < x && x < x2 : x2 < x && x < x1
   return dyl > 0 ? y1 < y && y < y2 : y2 < y && y < y1
+  // if (Math.abs(dxl) >= Math.abs(dyl)) return dxl > 0 ? x1 <= x && x <= x2 : x2 <= x && x <= x1
+  // return dyl > 0 ? y1 <= y && y <= y2 : y2 <= y && y <= y1
 }
 
 function round (num: number, eps?: number = EPSILON) {
