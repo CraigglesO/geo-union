@@ -7,10 +7,6 @@ export type MultiPolygon = Array<Polygon>
 
 type State = 0 | 1 | 2 // 0 -> outside, 1 -> inside, 2 -> overlap
 
-type Intersection = {
-  [string | number]: []
-}
-
 const EPSILON = 10000000
 
 export function dissolvePolygons (polygons: MultiPolygon) {
@@ -65,26 +61,21 @@ function dissolveLineStrings (lineString1: LineString, lineString2: LineString):
   const overlap = bboxOverlap(lineString1.bbox, lineString2.bbox)
   if (!overlap) return
   // run through the edges, if intersection 1, just keep it with the first one, for the second, drop it.
-  const [outside1, inside1, overlap1, intersections1] = linePolyInteractions(lineString1, lineString2)
-  const [outside2, inside2, overlap2, intersections2] = linePolyInteractions(lineString2, lineString1)
+  const [outside1, inside1, overlap1] = linePolyInteractions(lineString1, lineString2)
+  const [outside2, inside2, overlap2] = linePolyInteractions(lineString2, lineString1)
   if (!inside1.length && !overlap1.length && !inside2.length && !overlap2.length) return
-  // Refine the cases where intersections exist. If two of the same intersection are found, remove
-  refineIntersections(outside1, inside1, lineString1, intersections2)
-  refineIntersections(outside2, inside2, lineString2, intersections1)
   // Refine the cases of overlap1 & overlap2
   refineOverlaps(outside1, overlap1, overlap2)
-  // TODO: of remaining overlap data that goes against the flow of the other lineString,
+  // of remaining overlap data that goes against the flow of the other lineString,
   // convert that portion to inner
   overlapToInside(outside1, inside1, overlap2)
-  // overlapToInside(outside2, inside2, overlap1)
+  overlapToInside(outside2, inside2, overlap1)
   console.log('outside1', outside1)
   console.log('inside1', inside1)
   console.log('overlap1', overlap1)
-  console.log('intersections1', intersections1)
   console.log('outside2', outside2)
   console.log('inside2', inside2)
   console.log('overlap2', overlap2)
-  console.log('intersections2', intersections2)
   // one has only overlap and/or inside
   if (outside1 && !outside2) return outside1
   if (outside2 && !outside1) return outside2
@@ -150,75 +141,19 @@ function mergeLines (lines: Array<LineString>) {
   }
 }
 
-function refineIntersections (outside: Array<LineString>, inside: Array<LineString>,
-  poly: LineString, intersections: Intersection) {
-  let inters: Array<Point>, lineString: LineString, start: Point, point: Point,
-  newSection: LineString, curIntersection: Point, isOutside: boolean, found: boolean
-  // if there are any double or more intersections of the same line, we segregate out the inner pieces from outside
-  for (let index in intersections) {
-    index = +index
-    const inters = intersections[index]
-    if (inters.length > 1) {
-      found = false
-      // first grab the points
-      start = poly[index]
-      // sort according to distance from start
-      inters.sort((a, b) => {
-        return Math.sqrt(Math.pow(start[0] - a[0], 2) + Math.pow(start[1] - a[1], 2)) - Math.sqrt(Math.pow(start[0] - b[0], 2) + Math.pow(start[1] - b[1], 2))
-      })
-      // find the point outside
-      for (let j = 0, ol = outside.length; j < ol; j++) {
-        lineString = outside[j]
-        for (let i = 0, ll = lineString.length; i < ll; i++) {
-          point = lineString[i]
-          if (equal(start, point) && isPointOnLineSegment(...start, ...poly[index + 1], ...inters[0])) {
-            isOutside = true
-            // first store the initial section of the array
-            newSection = lineString.slice(0, i + 1)
-            // loop, adding the intersection
-            do {
-              // get current intersection
-              curIntersection = inters.shift()
-              // add current intersection
-              newSection.push(curIntersection)
-              // store to appropriate section
-              if (isOutside) outside.push(newSection)
-              else inside.push(newSection)
-              // update isOutside and clean newSection
-              isOutside = !isOutside
-              newSection = [curIntersection]
-            } while (inters.length)
-            // now add what's left of the current outside lineString to the end of the newSection and store
-            newSection.push(...lineString.slice(i + 1))
-            outside.push(newSection)
-            // lastly, remove the old outside and mark intersection set as solved
-            outside.splice(j, 1)
-            found = true
-            break
-          }
-        }
-        if (found) break
-      }
-    }
-  }
-}
-
 function refineOverlaps (outside: Array<LineString>, overlap: Array<LineString>, overlap2: Array<LineString>) {
   // Refining has two possibilities:
   // 1) If two overlaps are equal eachother, drop the overlaps
   // and store the overlap as an "outside"
   // 2) If two overlaps are equal but opposite to eachother, drop
   let firstOverlap: Point, secondOverlap: Point
-  let fol: number, sol: number
-  for (let j = 0, ol1 = overlap; j < ol1; j++) {
+  for (let j = 0; j < overlap.length; j++) {
     firstOverlap = overlap[j]
-    fol = firstOverlap.length - 1
-    for (let i = 0, ol2 = overlap2; i < ol2; i++) {
+    for (let i = 0; i < overlap2.length; i++) {
       secondOverlap = overlap2[i]
-      sol = secondOverlap.length - 1
       if (
         firstOverlap[0][0] === secondOverlap[0][0] && firstOverlap[0][1] === secondOverlap[0][1] &&
-        firstOverlap[fol][0] === secondOverlap[sol][1] && firstOverlap[fol][1] === secondOverlap[sol][0]
+        firstOverlap[1][0] === secondOverlap[1][0] && firstOverlap[1][1] === secondOverlap[1][1]
       ) {
         outside.push(firstOverlap)
         overlap.splice(j, 1)
@@ -226,8 +161,8 @@ function refineOverlaps (outside: Array<LineString>, overlap: Array<LineString>,
         j--
         break
       } else if (
-        firstOverlap[0][0] === secondOverlap[sol][0] && firstOverlap[0][1] === secondOverlap[sol][1] &&
-        firstOverlap[fol][0] === secondOverlap[0][1] && firstOverlap[fol][1] === secondOverlap[0][0]
+        firstOverlap[0][0] === secondOverlap[1][0] && firstOverlap[0][1] === secondOverlap[1][1] &&
+        firstOverlap[1][0] === secondOverlap[0][0] && firstOverlap[1][1] === secondOverlap[0][1]
       ) {
         overlap.splice(j, 1)
         overlap2.splice(i, 1)
@@ -320,52 +255,126 @@ function bboxOverlap (bbox1, bbox2): void | BBOX {
   if (leftRight && bottomTop) return [leftRight[0], bottomTop[0], leftRight[1], bottomTop[1]]
 }
 
-export function linePolyInteractions (lineString: LineString, poly: LineString): [Array<LineString>, Array<LineString>, Array<LineString>, Array<Intersection>] {
+export function linePolyInteractions (lineString: LineString, poly: LineString): [Array<LineString>, Array<LineString>, Array<LineString>] {
+  console.log('*************')
+  console.log(lineString)
   const outside: Array<LineString> = []
   const inside: Array<LineString> = []
   const overlap: Array<LineString> = []
   const stateLines = { 0: outside, 1: inside, 2: overlap } // [State]: LineString
-  const intersections: Intersection = {} // [index of poly]: Array<Point>
   let state: State, nextState: State
   let point: Point, nextPoint: Point
-  let line: LineString = []
+  let line: LineString = [] // track current state's line
+  let isOutside = false // for when we go from state 2 to nextState 2, but the line traverses inside or outside the other poly
 
   point = lineString[0]
   state = pointInPolygon(point, poly)
+  nextPoint = lineString[1]
+  nextState = pointInPolygon(nextPoint, poly)
   line.push(point)
-  for (let i = 1, ll = lineString.length; i < ll; i++) {
-    nextPoint = lineString[i]
-    nextState = pointInPolygon(nextPoint, poly)
-    if (nextState !== state) {
-      // if we are leaving or going to an overlap, the previous line finishes at that same point
-      if (state === 2 || nextState === 2) {
-        if (nextState === 2) line.push(nextPoint)
-        // if the lines length is too small, just drop it
-        if (line.length > 1) stateLines[state].push(line)
-        line = []
-        if (state === 2) line.push(point)
-        line.push(nextPoint)
-      } else { // a point went from outside to inside or vice versa, we need to find the intersection
-        const [index, intersect] = getIntersection(point, nextPoint, poly)
-        if (!intersections[index]) intersections[index] = [intersect]
-        else intersections[index].push(intersect)
+  if (state === 0) isOutside = true
+  let i = 2
+  let ll = lineString.length
+  while (true) {
+    console.log('point', state, point)
+    console.log('nextPoint', nextState, nextPoint)
+    console.log('isOutside start', isOutside)
+    const intersections = getIntersections(point, nextPoint, poly)
+    // intersection always takes precedence
+    if (intersections.length) {
+      // sort
+      intersections.sort((a, b) => distance(point, a[1]) - distance(point, b[1]))
+      while (intersections.length) {
+        // pull out info
+        const [index, intersect] = intersections.shift()
+        // add intersect to line
         line.push(intersect)
-        stateLines[state].push(line)
-        line = [intersect, nextPoint]
+        // store line
+        console.log('intersect', isOutside, intersect)
+        if (line.length > 1) stateLines[(isOutside) ? 0 : 1].push(line)
+        // start a new one at intersect
+        line = [intersect]
+        // update current point, state, and outside status
+        point = intersect
+        state = 2
+        isOutside = !isOutside
       }
-    } else {
-      line.push(nextPoint)
-      if (state === 2 && nextState === 2) {
-        stateLines[state].push(line)
+      // start over
+      continue
+    } else { // study potential changes in states. Since intersections are passed, we are considering whether
+      if (nextState !== state) {
+        // There MAY be partial overlap, otherwise its edge points
+        console.log('STATES', state, nextState)
+        const overlapPoint = findOverlap(point, nextPoint, poly)
+        if (overlapPoint) {
+          console.log('overlapPoint FOUND', overlapPoint)
+          // add overlap point
+          line.push(overlapPoint)
+          // store line
+          if (line.length > 1) stateLines[state].push(line)
+          // start new line, considering it inside
+          line = [overlapPoint]
+          // overlap works much like intersect
+          point = overlapPoint
+          state = 2
+          isOutside = !isOutside
+          continue
+        } else {
+          if (nextState === 2) line.push(nextPoint)
+          if (line.length > 1) stateLines[state].push(line)
+          line = []
+          // if we came from an edge, make sure line includes it
+          if (state === 2) line.push(point)
+          line.push(nextPoint)
+          // ensure we are inside or outside
+          if (nextState === 0) isOutside = true
+          else if (nextState === 1) isOutside = false
+        }
+      } else if (state === 2 && nextState === 2) {
+        // 2 more possibilities here.
+        // 1) the line traverses inside or outside the other poly
+        // 2) There is overlap that we need to store
+        // to figure it out, we find the state of the point in the middle
+        const lineState = pointInPolygon([(point[0] + nextPoint[0]) / 2, (point[1] + nextPoint[1]) / 2], poly)
+        line.push(nextPoint)
+        stateLines[lineState].push(line)
         line = [nextPoint]
+      } else { // if we make it here, we are just storing the point
+        line.push(nextPoint)
       }
     }
-    // move forward without running PIP twice
+    // update points
     point = nextPoint
     state = nextState
+    // check if we are done
+    if (i >= ll) break
+    // if not, update nextPoint and nextState
+    nextPoint = lineString[i]
+    nextState = pointInPolygon(nextPoint, poly)
+    // increment
+    i++
   }
   if (line.length > 1) stateLines[state].push(line)
-  return [outside, inside, overlap, intersections]
+  return [outside, inside, overlap]
+}
+
+function findOverlap (p1: Point, p2: Point, poly: LineString) {
+  let x3, y3, x4, y4
+  const x1 = p1[0]
+  const y1 = p1[1]
+  const x2 = p2[0]
+  const y2 = p2[1]
+  for (let i = 0, pl = poly.length - 1; i < pl; i++) {
+    x3 = poly[i][0]
+    y3 = poly[i][1]
+    x4 = poly[i + 1][0]
+    y4 = poly[i + 1][1]
+    const det = (x2 - x1) * (y4 - y3) - (x4 - x3) * (y2 - y1)
+    if (!det) {
+      if (isPointOnLineSegment(x1, y1, x2, y2, x3, y3)) return [x3, y3]
+      else if (isPointOnLineSegment(x1, y1, x2, y2, x4, y4)) return [x4, y4]
+    }
+  }
 }
 
 export function pointInPolygon (point: Point, poly: LineString): State {
@@ -406,14 +415,16 @@ function isPointOnLineSegment (x1: number, y1: number, x2: number, y2: number, x
   return dyl > 0 ? y1 < y && y < y2 : y2 < y && y < y1
 }
 
-function getIntersection (p1: Point, p2: Point, poly: LineString): void | [number, Point] {
+function getIntersections (p1: Point, p2: Point, poly: LineString): void | [number, Point] {
+  let intersections = []
   // run through the polygon, for each cross
   for (let i = 0, pl = poly.length - 1; i < pl; i++) {
     const pp1 = poly[i]
     const pp2 = poly[i + 1]
     const intersect = intersects(p1[0], p1[1], p2[0], p2[1], pp1[0], pp1[1], pp2[0], pp2[1])
-    if (intersect) return [i, intersect]
+    if (intersect) intersections.push([i, intersect])
   }
+  return intersections
 }
 
 function intersects (x1: number, y1: number, x2: number, y2: number, x3: number,
@@ -424,7 +435,7 @@ function intersects (x1: number, y1: number, x2: number, y2: number, x3: number,
   const gamma = ((y1 - y2) * (x4 - x1) + (x2 - x1) * (y4 - y1)) / det
   const lambdaRound = round(lambda)
   const gammaRound = round(gamma)
-  if ((lambdaRound >= 0 && lambdaRound <= 1) && (gammaRound >= 0 && gammaRound <= 1)) {
+  if ((lambdaRound > 0 && lambdaRound < 1) && (gammaRound > 0 && gammaRound < 1)) {
     return [x1 + lambda * (x2 - x1), y1 + lambda * (y2 - y1)]
   }
 }
